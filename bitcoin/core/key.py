@@ -214,6 +214,11 @@ class CECKey:
         r_val = rr.value
         s_val = ss.value
 
+        # tmp pubkey of self, but always compressed
+        pubkey = CECKey()
+        pubkey.set_pubkey(self.get_pubkey())
+        pubkey.set_compressed(True)
+
         # bitcoin core does <4, but I've seen other places do <2 and I've never seen a i > 1 so far
         for i in range(0, 4):
             print('i', i)
@@ -224,8 +229,8 @@ class CECKey:
             if result == 1:
                 print('RECOVERED!')
                 print(cec_key.get_pubkey())
-                print(self.get_pubkey())
-                if cec_key.get_pubkey() == self.get_pubkey():
+                print(pubkey.get_pubkey())
+                if cec_key.get_pubkey() == pubkey.get_pubkey():
                     return r_val + s_val, i
             else:
                 print('NOT', result)
