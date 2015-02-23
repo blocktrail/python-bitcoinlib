@@ -18,6 +18,12 @@ from bitcoin.core.serialize import ImmutableSerializable
 from bitcoin.wallet import P2PKHBitcoinAddress
 import bitcoin
 import base64
+import os
+import json
+
+def load_test_vectors(name):
+    with open(os.path.dirname(__file__) + '/data/' + name, 'r') as fd:
+        return json.load(fd)
 
 
 def VerifyMessage(address, message, sig):
@@ -51,7 +57,7 @@ class BitcoinMessage(ImmutableSerializable):
 
 
 class Test_SignVerifyMessage(unittest.TestCase):
-    def test_verify_message(self):
+    def test_verify_message_simple(self):
         address = "1F26pNMrywyZJdr22jErtKcjF8R3Ttt55G"
         message = "1F26pNMrywyZJdr22jErtKcjF8R3Ttt55G"
         signature = "H85WKpqtNZDrajOnYDgUY+abh0KCAcOsAIOQwx2PftAbLEPRA7mzXA/CjXRxzz0MC225pR/hx02Vf2Ag2x33kU4="
@@ -59,6 +65,11 @@ class Test_SignVerifyMessage(unittest.TestCase):
         message = BitcoinMessage(message)
 
         self.assertTrue(VerifyMessage(address, message, signature))
+
+    def test_verify_message_vectors(self):
+        for vector in load_test_vectors('sign_verify_message.json'):
+            message = BitcoinMessage(vector['address'])
+            self.assertTrue(VerifyMessage(vector['address'], message, vector['signature']))
 
 
 if __name__ == "__main__":
