@@ -99,6 +99,8 @@ class Test_SignVerifyMessage(unittest.TestCase):
 
         signature = SignMessage(key, message)
 
+        print(signature)
+
         self.assertTrue(signature)
 
         self.assertTrue(VerifyMessage(address, message, signature))

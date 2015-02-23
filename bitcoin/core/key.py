@@ -30,17 +30,10 @@ import bitcoin
 _bchr = chr
 _bord = ord
 if sys.version > '3':
-    long = int
     _bchr = lambda x: bytes([x])
     _bord = lambda x: x
-
-if sys.version > '3':
-    _bchr = lambda x: bytes([x])
-    _bord = lambda x: x[0]
     from io import BytesIO as BytesIO
 else:
-    _bchr = chr
-    _bord = ord
     from cStringIO import StringIO as BytesIO
 
 import bitcoin.core.script
@@ -170,63 +163,16 @@ class CECKey:
 
         sig = mb_sig.raw[:sig_size0.value]
 
-        sig = b'0D\x02 S\x15K?\xae3yvm/{|\x9a\xad\x7f\xb3\n\x02XV&\xfbT\x0e\x9c\xf8\xa3W"\x13\xa8\xce\x02 ;\xe0\x16{\x82s\x07\xc5\xfa\xac\xf1\xc3\x9c\xf4\x0es\xc0\xcd\r;\xde\xcaQPl<\x0c\xab\x0b\xb5S6'
+        # sig = b'0D\x02 S\x15K?\xae3yvm/{|\x9a\xad\x7f\xb3\n\x02XV&\xfbT\x0e\x9c\xf8\xa3W"\x13\xa8\xce\x02 ;\xe0\x16{\x82s\x07\xc5\xfa\xac\xf1\xc3\x9c\xf4\x0es\xc0\xcd\r;\xde\xcaQPl<\x0c\xab\x0b\xb5S6'
+        sig = b'0F\x02!\x00\x91Z\xebD\xdfH.\xe6Y\xbd+\x1c\xec\xe5\xe1\x13\xeeG\x81\x1f\xef\xd7\x8b\xac\xda"\x11\xccI\xe6\xe6c\x02!\x00\x80\x02Q\xfcA$\x06\x8a1`5,\x9a(}7\xefF\xc8\xb8\x87i\x89\x82k\x16t\x05\xc1|+\xe4'
 
-        print("")
-        print("")
-        print(sig, len(sig), sig_size0.value)
-
-        # decode DER
-        length_r = sig[3]
-        if isinstance(length_r, str):
-            length_r = int(struct.unpack('B', length_r)[0])
-        length_s = sig[5 + length_r]
-        if isinstance(length_s, str):
-            length_s = int(struct.unpack('B', length_s)[0])
-        r_val = sig[3:3 + length_r]
-        s_val = sig[6 + length_r:6 + length_r + length_s]
-
-        print('decoded DER:')
-        print(length_r, length_s)
-        print(len(r_val), len(s_val))
-        print(r_val, s_val)
+        # print("") print("")
+        # print(sig, len(sig), sig_size0.value)
 
         # debugging
         print("ECDSA says:")
         try:
-            sig_der = sig
-            order = SECP256k1.order
-
-            if not sig_der.startswith(b"\x30"):
-                raise ValueError
-            length, lengthlength = ecdsa.der.read_length(sig_der[1:])
-            endseq = 1+lengthlength+length
-            rs_strings, empty = sig_der[1+lengthlength:endseq], sig_der[endseq:]
-
-            if empty != b"":
-                raise ValueError("trailing junk after DER sig: %s" % empty)
-
-            if not rs_strings.startswith(b"\x02"):
-                raise ValueError("wanted integer (0x02)")
-            length, llen = ecdsa.der.read_length(rs_strings[1:])
-            print(1+lengthlength, 1+llen)
-            rbytes = rs_strings[1+llen:1+llen+length]
-            rest = rs_strings[1+llen+length:]
-            nbytes = rbytes[0]
-            assert nbytes < 0x80 # can't support negative numbers yet
-            r, rest = int(binascii.hexlify(rbytes), 16), rest
-
-            if not rest.startswith(b"\x02"):
-                raise ValueError("wanted integer (0x02)")
-            length, llen = ecdsa.der.read_length(rest[1:])
-            sbytes = rest[1+llen:1+llen+length]
-            rest = rest[1+llen+length:]
-            nbytes = sbytes[0]
-            assert nbytes < 0x80 # can't support negative numbers yet
-            s, empty = int(binascii.hexlify(sbytes), 16), rest
-
-            if empty != b"":
-                raise ValueError("trailing junk after DER numbers: %s" % empty)
+            r, s = ecdsa.util.sigdecode_der(sig, SECP256k1.order)
 
             print(r, s)
         except Exception as e:
@@ -235,7 +181,6 @@ class CECKey:
         f = BytesIO(sig)
         assert bitcoin.core.ser_read(f, 1) == b"\x30"
         rs_strings = bitcoin.core.BytesSerializer.stream_deserialize(f)
-        print(len(rs_strings))
         f = BytesIO(rs_strings)
         assert bitcoin.core.ser_read(f, 1) == b"\x02"
         r_val = bitcoin.core.BytesSerializer.stream_deserialize(f)
@@ -245,9 +190,11 @@ class CECKey:
         length_r = len(r_val)
         length_s = len(s_val)
 
+        print("DER decoded")
+        print(length_r, length_s)
+        print(r_val, s_val)
 
-
-        # for w/e this randomly results in R and S values that are missing bytes
+        # debugging bin2bn -> bn2bin
         print('bin2bn -> bn2bin')
         rr_val = _ssl.BN_bin2bn(r_val, length_r, _ssl.BN_new())
         ss_val = _ssl.BN_bin2bn(s_val, length_s, _ssl.BN_new())
@@ -262,6 +209,9 @@ class CECKey:
         print(len(rr.value), len(ss.value))
         print(rr.value, ss.value)
         print(int.from_bytes(rr.value, byteorder='big'), int.from_bytes(ss.value, byteorder='big'))
+
+        r_val = rr.value
+        s_val = ss.value
 
         # bitcoin core does <4, but I've seen other places do <2 and I've never seen a i > 1 so far
         for i in range(0, 4):
@@ -353,9 +303,12 @@ class CECKey:
         O = None
         Q = None
 
+        assert len(sigR) == 32, len(sigR)
+        assert len(sigS) == 32, len(sigS)
+
         try:
-            r = _ssl.BN_bin2bn(sigR, 32, _ssl.BN_new())
-            s = _ssl.BN_bin2bn(sigS, 32, _ssl.BN_new())
+            r = _ssl.BN_bin2bn(sigR, len(sigR), _ssl.BN_new())
+            s = _ssl.BN_bin2bn(sigS, len(sigS), _ssl.BN_new())
 
             group = _ssl.EC_KEY_get0_group(self.k)
             ctx = _ssl.BN_CTX_new()
