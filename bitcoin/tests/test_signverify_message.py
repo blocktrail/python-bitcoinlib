@@ -41,15 +41,25 @@ def VerifyMessage(address, message, sig):
 
     pubkey = CPubKey.recover_compact(hash, sig)
 
+    print("")
+    print("VerifyMessage")
+    print(str(P2PKHBitcoinAddress.from_pubkey(pubkey)))
+
     return str(P2PKHBitcoinAddress.from_pubkey(pubkey)) == address
 
 
 def SignMessage(key, message):
+    print("")
+    print("SignMessage")
+    print(str(P2PKHBitcoinAddress.from_pubkey(key.pub)))
+
     sig, i = key.sign_compact(message.GetHash())
 
     meta = 27 + i
     if key.is_compressed:
         meta += 4
+
+    print(meta, _bchr(meta))
 
     return base64.b64encode(_bchr(meta) + sig)
 

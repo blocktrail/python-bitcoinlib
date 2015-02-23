@@ -164,10 +164,11 @@ class CECKey:
         sig = mb_sig.raw[:sig_size0.value]
 
         # sig = b'0D\x02 S\x15K?\xae3yvm/{|\x9a\xad\x7f\xb3\n\x02XV&\xfbT\x0e\x9c\xf8\xa3W"\x13\xa8\xce\x02 ;\xe0\x16{\x82s\x07\xc5\xfa\xac\xf1\xc3\x9c\xf4\x0es\xc0\xcd\r;\xde\xcaQPl<\x0c\xab\x0b\xb5S6'
-        sig = b'0F\x02!\x00\x91Z\xebD\xdfH.\xe6Y\xbd+\x1c\xec\xe5\xe1\x13\xeeG\x81\x1f\xef\xd7\x8b\xac\xda"\x11\xccI\xe6\xe6c\x02!\x00\x80\x02Q\xfcA$\x06\x8a1`5,\x9a(}7\xefF\xc8\xb8\x87i\x89\x82k\x16t\x05\xc1|+\xe4'
+        # sig = b'0F\x02!\x00\x91Z\xebD\xdfH.\xe6Y\xbd+\x1c\xec\xe5\xe1\x13\xeeG\x81\x1f\xef\xd7\x8b\xac\xda"\x11\xccI\xe6\xe6c\x02!\x00\x80\x02Q\xfcA$\x06\x8a1`5,\x9a(}7\xefF\xc8\xb8\x87i\x89\x82k\x16t\x05\xc1|+\xe4'
+        # sig = b'0E\x02!\x00\x828\xe57\xf8\x85\xfc\xf6\xa9\x98LK+\xfbj\x88a~\xbd\x86\xc24\xc3sm\x7f\xe2\xe2v"L\xe1\x02 j4\xeb\x04\xca\x1a.\x8a~e\x83mg:y\xe5\xc7\x0cO\xb2}\xda\x10\xf3\xec\x11\xce\x12{\xbd\xa1\x13'
 
-        # print("") print("")
-        # print(sig, len(sig), sig_size0.value)
+        print("") or print("")
+        print(sig, len(sig), sig_size0.value)
 
         # debugging
         print("ECDSA says:")
@@ -215,16 +216,16 @@ class CECKey:
 
         # bitcoin core does <4, but I've seen other places do <2 and I've never seen a i > 1 so far
         for i in range(0, 4):
+            print('i', i)
             cec_key = CECKey()
             cec_key.set_compressed(True)
 
             result = cec_key.recover(r_val, s_val, hash, len(hash), i, 1)
             if result == 1:
-                # return mb_sig.raw
                 print('RECOVERED!')
-                # even when recovered, these don't match :/
-                print(cec_key.get_pubkey(), self.get_pubkey())
-                if cec_key.get_pubkey() == self.get_pubkey() or True:
+                print(cec_key.get_pubkey())
+                print(self.get_pubkey())
+                if cec_key.get_pubkey() == self.get_pubkey():
                     return r_val + s_val, i
             else:
                 print('NOT', result)
@@ -331,13 +332,13 @@ class CECKey:
                 return -2
 
             if _ssl.BN_cmp(x, field) >= 0:
-                return '_ssl.BN_cmp'
+                return 0
 
             R = _ssl.EC_POINT_new(group)
             if R is None:
                 return -2
             if not _ssl.EC_POINT_set_compressed_coordinates_GFp(group, R, x, recid % 2, ctx):
-                return 'not _ssl.EC_POINT_set_compressed_coordinates_GFp'
+                return 0
 
             if check:
                 O = _ssl.EC_POINT_new(group)
@@ -346,7 +347,7 @@ class CECKey:
                 if not _ssl.EC_POINT_mul(group, O, None, R, order, ctx):
                     return -2
                 if not _ssl.EC_POINT_is_at_infinity(group, O):
-                    return 'not _ssl.EC_POINT_is_at_infinity'
+                    return 0
 
             Q = _ssl.EC_POINT_new(group)
             if Q is None:
@@ -408,7 +409,7 @@ class CPubKey(bytes):
         return self
 
     @classmethod
-    def recover_compact(cls, hash, sig, check=0):
+    def recover_compact(cls, hash, sig):
         """Recover a public key from a compact signature."""
         if len(sig) != 65:
             raise ValueError("Signature should be 65 characters, not [%d]" % (len(sig), ))
@@ -422,11 +423,13 @@ class CPubKey(bytes):
         sigR = sig[1:33]
         sigS = sig[33:65]
 
-        result = cec_key.recover(sigR, sigS, hash, len(hash), recid, check)
+        result = cec_key.recover(sigR, sigS, hash, len(hash), recid, 0)
 
         if result < 1:
             return False
 
+        print("cec_key.recover", sigR, sigS, hash, len(hash), recid, 0)
+        print(cec_key, cec_key.get_pubkey())
         pubkey = cec_key.get_pubkey()
 
         return CPubKey(pubkey, _cec_key=cec_key)
