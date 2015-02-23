@@ -23,7 +23,9 @@ import hashlib
 import sys
 import struct
 import math
+import binascii
 import ecdsa
+import bitcoin
 
 _bchr = chr
 _bord = ord
@@ -31,6 +33,15 @@ if sys.version > '3':
     long = int
     _bchr = lambda x: bytes([x])
     _bord = lambda x: x
+
+if sys.version > '3':
+    _bchr = lambda x: bytes([x])
+    _bord = lambda x: x[0]
+    from io import BytesIO as BytesIO
+else:
+    _bchr = chr
+    _bord = ord
+    from cStringIO import StringIO as BytesIO
 
 import bitcoin.core.script
 
@@ -159,15 +170,11 @@ class CECKey:
 
         sig = mb_sig.raw[:sig_size0.value]
 
+        sig = b'0D\x02 S\x15K?\xae3yvm/{|\x9a\xad\x7f\xb3\n\x02XV&\xfbT\x0e\x9c\xf8\xa3W"\x13\xa8\xce\x02 ;\xe0\x16{\x82s\x07\xc5\xfa\xac\xf1\xc3\x9c\xf4\x0es\xc0\xcd\r;\xde\xcaQPl<\x0c\xab\x0b\xb5S6'
+
         print("")
         print("")
         print(sig, len(sig), sig_size0.value)
-
-        # sequence
-        print(sig[0])
-
-        # length
-        print(ecdsa.der.read_length(sig[1:]))
 
         # decode DER
         length_r = sig[3]
@@ -187,10 +194,57 @@ class CECKey:
         # debugging
         print("ECDSA says:")
         try:
-            r, s = ecdsa.util.sigdecode_der(sig, SECP256k1.order)
+            sig_der = sig
+            order = SECP256k1.order
+
+            if not sig_der.startswith(b"\x30"):
+                raise ValueError
+            length, lengthlength = ecdsa.der.read_length(sig_der[1:])
+            endseq = 1+lengthlength+length
+            rs_strings, empty = sig_der[1+lengthlength:endseq], sig_der[endseq:]
+
+            if empty != b"":
+                raise ValueError("trailing junk after DER sig: %s" % empty)
+
+            if not rs_strings.startswith(b"\x02"):
+                raise ValueError("wanted integer (0x02)")
+            length, llen = ecdsa.der.read_length(rs_strings[1:])
+            print(1+lengthlength, 1+llen)
+            rbytes = rs_strings[1+llen:1+llen+length]
+            rest = rs_strings[1+llen+length:]
+            nbytes = rbytes[0]
+            assert nbytes < 0x80 # can't support negative numbers yet
+            r, rest = int(binascii.hexlify(rbytes), 16), rest
+
+            if not rest.startswith(b"\x02"):
+                raise ValueError("wanted integer (0x02)")
+            length, llen = ecdsa.der.read_length(rest[1:])
+            sbytes = rest[1+llen:1+llen+length]
+            rest = rest[1+llen+length:]
+            nbytes = sbytes[0]
+            assert nbytes < 0x80 # can't support negative numbers yet
+            s, empty = int(binascii.hexlify(sbytes), 16), rest
+
+            if empty != b"":
+                raise ValueError("trailing junk after DER numbers: %s" % empty)
+
             print(r, s)
         except Exception as e:
             print(e)
+
+        f = BytesIO(sig)
+        assert bitcoin.core.ser_read(f, 1) == b"\x30"
+        rs_strings = bitcoin.core.BytesSerializer.stream_deserialize(f)
+        print(len(rs_strings))
+        f = BytesIO(rs_strings)
+        assert bitcoin.core.ser_read(f, 1) == b"\x02"
+        r_val = bitcoin.core.BytesSerializer.stream_deserialize(f)
+        assert bitcoin.core.ser_read(f, 1) == b"\x02"
+        s_val = bitcoin.core.BytesSerializer.stream_deserialize(f)
+
+        length_r = len(r_val)
+        length_s = len(s_val)
+
 
 
         # for w/e this randomly results in R and S values that are missing bytes
