@@ -13,13 +13,22 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import unittest
 
+from bitcoin.wallet import CKey, CBitcoinSecret
 from bitcoin.core.key import CPubKey
 from bitcoin.core.serialize import ImmutableSerializable
 from bitcoin.wallet import P2PKHBitcoinAddress
 import bitcoin
 import base64
+import sys
 import os
 import json
+
+_bchr = chr
+_bord = ord
+if sys.version > '3':
+    long = int
+    _bchr = lambda x: bytes([x])
+    _bord = lambda x: x
 
 def load_test_vectors(name):
     with open(os.path.dirname(__file__) + '/data/' + name, 'r') as fd:
@@ -33,6 +42,16 @@ def VerifyMessage(address, message, sig):
     pubkey = CPubKey.recover_compact(hash, sig)
 
     return str(P2PKHBitcoinAddress.from_pubkey(pubkey)) == address
+
+
+def SignMessage(key, message):
+    sig, i = key.sign_compact(message.GetHash())
+
+    meta = 27 + i
+    if key.is_compressed:
+        meta += 4
+
+    return base64.b64encode(_bchr(meta) + sig)
 
 
 class BitcoinMessage(ImmutableSerializable):
@@ -59,7 +78,7 @@ class BitcoinMessage(ImmutableSerializable):
 class Test_SignVerifyMessage(unittest.TestCase):
     def test_verify_message_simple(self):
         address = "1F26pNMrywyZJdr22jErtKcjF8R3Ttt55G"
-        message = "1F26pNMrywyZJdr22jErtKcjF8R3Ttt55G"
+        message = address
         signature = "H85WKpqtNZDrajOnYDgUY+abh0KCAcOsAIOQwx2PftAbLEPRA7mzXA/CjXRxzz0MC225pR/hx02Vf2Ag2x33kU4="
 
         message = BitcoinMessage(message)
@@ -70,6 +89,21 @@ class Test_SignVerifyMessage(unittest.TestCase):
         for vector in load_test_vectors('sign_verify_message.json'):
             message = BitcoinMessage(vector['address'])
             self.assertTrue(VerifyMessage(vector['address'], message, vector['signature']))
+
+    def test_sign_message_simple(self):
+        key = CBitcoinSecret("L4vB5fomsK8L95wQ7GFzvErYGht49JsCPJyJMHpB4xGM6xgi2jvG")
+        address = "1F26pNMrywyZJdr22jErtKcjF8R3Ttt55G"
+        message = address
+
+        message = BitcoinMessage(message)
+
+        signature = SignMessage(key, message)
+
+        self.assertTrue(signature)
+
+        self.assertTrue(VerifyMessage(address, message, signature))
+
+
 
 
 if __name__ == "__main__":

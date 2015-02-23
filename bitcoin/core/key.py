@@ -15,11 +15,15 @@
 WARNING: This module does not mlock() secrets; your private keys may end up on
 disk in swap! Use with caution!
 """
+import base64
 
 import ctypes
 import ctypes.util
 import hashlib
 import sys
+import struct
+import math
+import ecdsa
 
 _bchr = chr
 _bord = ord
@@ -34,6 +38,19 @@ _ssl = ctypes.cdll.LoadLibrary(ctypes.util.find_library('ssl') or 'libeay32')
 
 # this specifies the curve used with ECDSA.
 _NID_secp256k1 = 714 # from openssl/obj_mac.h
+
+class SECP256k1:
+    oid = (1, 3, 132, 0, 10)
+    p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+    order = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+    a = 0x0000000000000000000000000000000000000000000000000000000000000000
+    b = 0x0000000000000000000000000000000000000000000000000000000000000007
+    h = 1
+    Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+    Gy = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
+    curve = ecdsa.ellipticcurve.CurveFp(p, a, b)
+    G = ecdsa.ellipticcurve.Point(curve, Gx, Gy, order)
+    ecdsa_curve = ecdsa.curves.Curve("SECP256k1", curve, G, oid)
 
 # Thx to Sam Devlin for the ctypes magic 64-bit fix.
 def _check_result (val, func, args):
@@ -128,6 +145,88 @@ class CECKey:
         else:
             return self.signature_to_low_s(mb_sig.raw[:sig_size0.value])
 
+    def sign_compact(self, hash):
+        if not isinstance(hash, bytes):
+            raise TypeError('Hash must be bytes instance; got %r' % hash.__class__)
+        if len(hash) != 32:
+            raise ValueError('Hash must be exactly 32 bytes long')
+
+        sig_size0 = ctypes.c_uint32()
+        sig_size0.value = _ssl.ECDSA_size(self.k)
+        mb_sig = ctypes.create_string_buffer(sig_size0.value)
+        result = _ssl.ECDSA_sign(0, hash, len(hash), mb_sig, ctypes.byref(sig_size0), self.k)
+        assert 1 == result
+
+        sig = mb_sig.raw[:sig_size0.value]
+
+        print("")
+        print("")
+        print(sig, len(sig), sig_size0.value)
+
+        # sequence
+        print(sig[0])
+
+        # length
+        print(ecdsa.der.read_length(sig[1:]))
+
+        # decode DER
+        length_r = sig[3]
+        if isinstance(length_r, str):
+            length_r = int(struct.unpack('B', length_r)[0])
+        length_s = sig[5 + length_r]
+        if isinstance(length_s, str):
+            length_s = int(struct.unpack('B', length_s)[0])
+        r_val = sig[3:3 + length_r]
+        s_val = sig[6 + length_r:6 + length_r + length_s]
+
+        print('decoded DER:')
+        print(length_r, length_s)
+        print(len(r_val), len(s_val))
+        print(r_val, s_val)
+
+        # debugging
+        print("ECDSA says:")
+        try:
+            r, s = ecdsa.util.sigdecode_der(sig, SECP256k1.order)
+            print(r, s)
+        except Exception as e:
+            print(e)
+
+
+        # for w/e this randomly results in R and S values that are missing bytes
+        print('bin2bn -> bn2bin')
+        rr_val = _ssl.BN_bin2bn(r_val, length_r, _ssl.BN_new())
+        ss_val = _ssl.BN_bin2bn(s_val, length_s, _ssl.BN_new())
+        print(_ssl.BN_num_bits(rr_val), _ssl.BN_num_bits(ss_val))
+        length_rr = int(math.ceil(_ssl.BN_num_bits(rr_val) / 8))
+        length_ss = int(math.ceil(_ssl.BN_num_bits(ss_val) / 8))
+        print(length_rr, length_ss)
+        rr = ctypes.create_string_buffer(length_rr)
+        ss = ctypes.create_string_buffer(length_ss)
+        _ssl.BN_bn2bin(rr_val, rr)
+        _ssl.BN_bn2bin(ss_val, ss)
+        print(len(rr.value), len(ss.value))
+        print(rr.value, ss.value)
+        print(int.from_bytes(rr.value, byteorder='big'), int.from_bytes(ss.value, byteorder='big'))
+
+        # bitcoin core does <4, but I've seen other places do <2 and I've never seen a i > 1 so far
+        for i in range(0, 4):
+            cec_key = CECKey()
+            cec_key.set_compressed(True)
+
+            result = cec_key.recover(r_val, s_val, hash, len(hash), i, 1)
+            if result == 1:
+                # return mb_sig.raw
+                print('RECOVERED!')
+                # even when recovered, these don't match :/
+                print(cec_key.get_pubkey(), self.get_pubkey())
+                if cec_key.get_pubkey() == self.get_pubkey() or True:
+                    return r_val + s_val, i
+            else:
+                print('NOT', result)
+
+        raise ValueError
+
     def signature_to_low_s(self, sig):
         der_sig = ECDSA_SIG_st()
         _ssl.d2i_ECDSA_SIG(ctypes.byref(ctypes.pointer(der_sig)), ctypes.byref(ctypes.c_char_p(sig)), len(sig))
@@ -185,7 +284,12 @@ class CECKey:
             form = self.POINT_CONVERSION_UNCOMPRESSED
         _ssl.EC_KEY_set_conv_form(self.k, form)
 
-    def recover(self, sig, msg, msglen, recid, check):
+    def recover(self, sigR, sigS, msg, msglen, recid, check):
+        """
+        Perform ECDSA key recovery (see SEC1 4.1.6) for curves over (mod p)-fields
+        recid selects which key is recovered
+        if check is non-zero, additional checks are performed
+        """
         i = int(recid / 2)
 
         r = None
@@ -196,8 +300,8 @@ class CECKey:
         Q = None
 
         try:
-            r = _ssl.BN_bin2bn(sig[:32], 32, _ssl.BN_new())
-            s = _ssl.BN_bin2bn(sig[32:64], 32, _ssl.BN_new())
+            r = _ssl.BN_bin2bn(sigR, 32, _ssl.BN_new())
+            s = _ssl.BN_bin2bn(sigS, 32, _ssl.BN_new())
 
             group = _ssl.EC_KEY_get0_group(self.k)
             ctx = _ssl.BN_CTX_new()
@@ -220,13 +324,13 @@ class CECKey:
                 return -2
 
             if _ssl.BN_cmp(x, field) >= 0:
-                return 0
+                return '_ssl.BN_cmp'
 
             R = _ssl.EC_POINT_new(group)
             if R is None:
                 return -2
             if not _ssl.EC_POINT_set_compressed_coordinates_GFp(group, R, x, recid % 2, ctx):
-                return 0
+                return 'not _ssl.EC_POINT_set_compressed_coordinates_GFp'
 
             if check:
                 O = _ssl.EC_POINT_new(group)
@@ -235,7 +339,7 @@ class CECKey:
                 if not _ssl.EC_POINT_mul(group, O, None, R, order, ctx):
                     return -2
                 if not _ssl.EC_POINT_is_at_infinity(group, O):
-                    return 0
+                    return 'not _ssl.EC_POINT_is_at_infinity'
 
             Q = _ssl.EC_POINT_new(group)
             if Q is None:
@@ -297,9 +401,10 @@ class CPubKey(bytes):
         return self
 
     @classmethod
-    def recover_compact(cls, hash, sig):
+    def recover_compact(cls, hash, sig, check=0):
+        """Recover a public key from a compact signature."""
         if len(sig) != 65:
-            raise ValueError("Signature should be 65 characters")
+            raise ValueError("Signature should be 65 characters, not [%d]" % (len(sig), ))
 
         recid = (_bord(sig[0]) - 27) & 3
         compressed = (_bord(sig[0]) - 27) & 4 != 0
@@ -307,7 +412,10 @@ class CPubKey(bytes):
         cec_key = CECKey()
         cec_key.set_compressed(compressed)
 
-        result = cec_key.recover(sig[1:], hash, len(hash), recid, 0)
+        sigR = sig[1:33]
+        sigS = sig[33:65]
+
+        result = cec_key.recover(sigR, sigS, hash, len(hash), recid, check)
 
         if result < 1:
             return False
