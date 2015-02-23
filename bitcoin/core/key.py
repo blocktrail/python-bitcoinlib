@@ -21,6 +21,13 @@ import ctypes.util
 import hashlib
 import sys
 
+_bchr = chr
+_bord = ord
+if sys.version > '3':
+    long = int
+    _bchr = lambda x: bytes([x])
+    _bord = lambda x: x
+
 import bitcoin.core.script
 
 _ssl = ctypes.cdll.LoadLibrary(ctypes.util.find_library('ssl') or 'libeay32')
@@ -178,6 +185,98 @@ class CECKey:
             form = self.POINT_CONVERSION_UNCOMPRESSED
         _ssl.EC_KEY_set_conv_form(self.k, form)
 
+    def recover(self, sig, msg, msglen, recid, check):
+        i = int(recid / 2)
+
+        r = None
+        s = None
+        ctx = None
+        R = None
+        O = None
+        Q = None
+
+        try:
+            r = _ssl.BN_bin2bn(sig[:32], 32, _ssl.BN_new())
+            s = _ssl.BN_bin2bn(sig[32:64], 32, _ssl.BN_new())
+
+            group = _ssl.EC_KEY_get0_group(self.k)
+            ctx = _ssl.BN_CTX_new()
+            order = _ssl.BN_CTX_get(ctx)
+            ctx = _ssl.BN_CTX_new()
+
+            if not _ssl.EC_GROUP_get_order(group, order, ctx):
+                return -2
+
+            x = _ssl.BN_CTX_get(ctx)
+            if not _ssl.BN_copy(x, order):
+                return -1
+            if not _ssl.BN_mul_word(x, i):
+                return -1
+            if not _ssl.BN_add(x, x, r):
+                return -1
+
+            field = _ssl.BN_CTX_get(ctx)
+            if not _ssl.EC_GROUP_get_curve_GFp(group, field, None, None, ctx):
+                return -2
+
+            if _ssl.BN_cmp(x, field) >= 0:
+                return 0
+
+            R = _ssl.EC_POINT_new(group)
+            if R is None:
+                return -2
+            if not _ssl.EC_POINT_set_compressed_coordinates_GFp(group, R, x, recid % 2, ctx):
+                return 0
+
+            if check:
+                O = _ssl.EC_POINT_new(group)
+                if O is None:
+                    return -2
+                if not _ssl.EC_POINT_mul(group, O, None, R, order, ctx):
+                    return -2
+                if not _ssl.EC_POINT_is_at_infinity(group, O):
+                    return 0
+
+            Q = _ssl.EC_POINT_new(group)
+            if Q is None:
+                return -2
+
+            n = _ssl.EC_GROUP_get_degree(group)
+            e = _ssl.BN_CTX_get(ctx)
+            if not _ssl.BN_bin2bn(msg, msglen, e):
+                return -1
+
+            if 8 * msglen > n:
+                _ssl.BN_rshift(e, e, 8 - (n & 7))
+
+            zero = _ssl.BN_CTX_get(ctx)
+            # if not _ssl.BN_zero(zero):
+            #     return -1
+            if not _ssl.BN_mod_sub(e, zero, e, order, ctx):
+                return -1
+            rr = _ssl.BN_CTX_get(ctx)
+            if not _ssl.BN_mod_inverse(rr, r, order, ctx):
+                return -1
+            sor = _ssl.BN_CTX_get(ctx)
+            if not _ssl.BN_mod_mul(sor, s, rr, order, ctx):
+                return -1
+            eor = _ssl.BN_CTX_get(ctx)
+            if not _ssl.BN_mod_mul(eor, e, rr, order, ctx):
+                return -1
+            if not _ssl.EC_POINT_mul(group, Q, eor, R, sor, ctx):
+                return -2
+
+            if not _ssl.EC_KEY_set_public_key(self.k, Q):
+                return -2
+
+            return 1
+        finally:
+            if r: _ssl.BN_free(r)
+            if s: _ssl.BN_free(s)
+            if ctx: _ssl.BN_CTX_free(ctx)
+            if R: _ssl.EC_POINT_free(R)
+            if O: _ssl.EC_POINT_free(O)
+            if Q: _ssl.EC_POINT_free(Q)
 
 class CPubKey(bytes):
     """An encapsulated public key
@@ -196,6 +295,26 @@ class CPubKey(bytes):
         self._cec_key = _cec_key
         self.is_fullyvalid = _cec_key.set_pubkey(self) != 0
         return self
+
+    @classmethod
+    def recover_compact(cls, hash, sig):
+        if len(sig) != 65:
+            raise ValueError("Signature should be 65 characters")
+
+        recid = (_bord(sig[0]) - 27) & 3
+        compressed = (_bord(sig[0]) - 27) & 4 != 0
+
+        cec_key = CECKey()
+        cec_key.set_compressed(compressed)
+
+        result = cec_key.recover(sig[1:], hash, len(hash), recid, 0)
+
+        if result < 1:
+            return False
+
+        pubkey = cec_key.get_pubkey()
+
+        return CPubKey(pubkey, _cec_key=cec_key)
 
     @property
     def is_valid(self):
